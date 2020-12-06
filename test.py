@@ -10,4 +10,4 @@ final_path = os.path.join(pathstart, "ROM", game, game + ".bin")
 assert os.path.exists(final_path)
 n_cpu = multiprocessing.cpu_count()
 #n_cpu = 1
-print(example.run_main(final_path, 300000000, n_cpu, 1000000000))
+print(example.run_main(final_path, 30000000, n_cpu, 1000000000))

@@ -27,7 +27,8 @@ using std::cout; using std::endl;
 constexpr int num_moves = 18;
 struct Entry{
     uint8_t future_vals[num_moves]={rep18(255)};
-    uint16_t visits=0;
+    uint32_t visits=0;
+    uint32_t tot_future_states=0;
     uint32_t tot_value=0;
 };
 std::vector<Entry> global_table;
@@ -40,15 +41,16 @@ using rand_gen = std::mt19937;
 int get_index(MD5Val hash){
     return hash.lower % global_table.size();
 }
-uint8_t futue_val(volatile Entry & p,volatile Entry & c, rand_gen & gen){
-    if(c.visits == 0){
-        return 150;
-    }
-    double avg_val = (1.+c.tot_value) / double(c.visits);
-    double log_val = log(avg_val)/log(1.5) + 100;
+uint8_t future_val(volatile Entry & p,volatile Entry & c){
+    uint32_t optimistic_fut_state_rate = (p.tot_future_states*2)/p.visits + 100;
+    constexpr uint32_t OPTIMISTIC_COUNT = 10;
+    static_assert(OPTIMISTIC_COUNT > 0, "OPTIMISTIC_COUNT must be greater than 0 for numerical stability");
+    double optimistic_fut_stateval = (OPTIMISTIC_COUNT * optimistic_fut_state_rate + c.tot_future_states) / double(OPTIMISTIC_COUNT + c.visits);
+    double avg_val = c.tot_value / double(c.visits);
+    double log_val = log(avg_val + optimistic_fut_stateval)/log(1.5) + 100;
     return log_val;
 }
-void process_stack(std::vector<MD5Val> & hash_stack, std::vector<int> & reward_stack, std::vector<int> & action_stack, rand_gen & gen){
+void process_stack(std::vector<MD5Val> & hash_stack, std::vector<int> & reward_stack, std::vector<int> & action_stack){
     global_lock.lock();
 
     assert(hash_stack.size() == reward_stack.size() && hash_stack.size() == action_stack.size()+1);
@@ -64,6 +66,7 @@ void process_stack(std::vector<MD5Val> & hash_stack, std::vector<int> & reward_s
     // }
     volatile Entry & final = global_table[get_index(hash_stack.back())];
     final.visits += 1;
+    final.tot_future_states += 0;
     final.tot_value += reward_stack.back();
     for(int i = int(action_stack.size())-1; i >= 0 ; i--){
         int trans = action_stack[i];
@@ -72,7 +75,8 @@ void process_stack(std::vector<MD5Val> & hash_stack, std::vector<int> & reward_s
         assert (child.visits > 0);
         parent.visits += 1;
         parent.tot_value += child.visits ? child.tot_value/child.visits + reward_stack[i] : 0;
-        parent.future_vals[trans] = futue_val(parent, child, gen);
+        parent.future_vals[trans] = future_val(parent, child);
+        parent.tot_future_states += action_stack.size()-i;
     }
 
     global_lock.unlock();
@@ -118,7 +122,7 @@ void eval_loop(std::string rom_path, int max_steps, int index, int * is_done){
         reward_stack.push_back(reward);
         if (ale_example.game_over() || ale_example.lives() != start_lives) {
             ale_example.reset_game();
-            process_stack(hash_stack, reward_stack, action_stack, gen);
+            process_stack(hash_stack, reward_stack, action_stack);
             reward = 0;
             hash_stack.clear();
             reward_stack.clear();
@@ -173,7 +177,7 @@ int run_main(std::string rom_path, size_t table_size, size_t num_threads, size_t
             }
         }
         std::cerr << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(30000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
         if (PyErr_CheckSignals() != 0)
             throw py::error_already_set();
     }
